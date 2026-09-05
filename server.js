@@ -45,11 +45,16 @@ const FORMAT_SELECTOR = "18/best[acodec!=none][vcodec!=none]/best";
 // returning a usable direct "url" for progressive formats (it only hands
 // back an HLS/DASH manifest instead), which is why the plain format
 // selector above can fail with "Requested format is not available" even
-// though the video is perfectly playable. The "android" client still
-// returns real direct googlevideo.com URLs, so it's requested first, with
-// "web" kept as a fallback client in case a given video isn't served to
-// android (e.g. certain age-gated or restricted videos).
-const EXTRACTOR_ARGS = "youtube:player_client=android,web";
+// though the video is perfectly playable. "android" still returns real
+// direct googlevideo.com URLs for most videos, but YouTube has started
+// bot-checking ("Sign in to confirm you're not a bot") datacenter IPs on
+// that client for a growing subset of videos. "ios" and "tv" are kept as
+// further fallbacks because YouTube bot-checks each client independently -
+// a video blocked on one client is frequently still resolvable on another,
+// so trying several in order meaningfully increases the success rate on a
+// shared cloud IP without needing cookies or a proxy.
+const PLAYER_CLIENTS = ["android", "ios", "tv", "web"];
+const EXTRACTOR_ARGS = `youtube:player_client=${PLAYER_CLIENTS.join(",")}`;
 
 const YOUTUBE_HOSTS = new Set([
   "youtube.com",
