@@ -34,6 +34,13 @@ const path = require("path");
 const PORT = process.env.PORT || 10000;
 const SHARED_SECRET = process.env.RESOLVER_SECRET || "";
 const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 30_000);
+// Free/shared proxies are frequently dead or badly congested - waiting the
+// full YTDLP_TIMEOUT_MS on each one before moving to the next would make a
+// 10-proxy list take minutes to fail. A shorter per-proxy budget lets
+// resolveWithProxyRetries() burn through dead proxies quickly and spend the
+// bulk of its time on ones that actually respond. Only applies when a proxy
+// is in use; a direct (no-proxy) request still gets the full YTDLP_TIMEOUT_MS.
+const PROXY_TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS || 12_000);
 
 // -----------------------------------------------------------------------
 // PO Token provider companion process
@@ -258,8 +265,12 @@ async function resolveWithProxyRetries(url, timeoutMs) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     const proxy = nextProxy();
+    // A proxy attempt gets the shorter PROXY_TIMEOUT_MS so a dead/congested
+    // proxy is abandoned quickly and the next one gets tried instead of
+    // burning the full budget on each one; a direct (no-proxy) request
+    // still gets the full timeoutMs.
     try {
-      return await runYtDlp(url, timeoutMs, proxy);
+      return await runYtDlp(url, proxy ? PROXY_TIMEOUT_MS : timeoutMs, proxy);
     } catch (err) {
       lastErr = err;
       const retryable = err && (err.code === "youtube_extraction_failed" || err.code === "resolve_timeout");
