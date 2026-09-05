@@ -113,6 +113,28 @@ if (process.env.YT_COOKIES_BASE64) {
   }
 }
 
+// Optional: a comma-separated list of proxy URLs (http://ip:port,
+// http://user:pass@ip:port, socks5://ip:port, ...) so yt-dlp's outbound
+// request comes from a residential/rotating IP instead of this Render
+// container's own datacenter IP - the actual root cause of "Sign in to
+// confirm you're not a bot" on cloud hosts (see classifyYtDlpError below).
+// Free proxy lists are short-lived and often already blocked by YouTube,
+// so runYtDlp() round-robins through the list and, on a bot-check/timeout
+// failure, automatically retries the same request on the next proxy
+// before giving up - this meaningfully improves the odds with an
+// otherwise unreliable free list without requiring a paid provider.
+const PROXY_LIST = (process.env.YT_PROXY_LIST || "")
+  .split(",")
+  .map((p) => p.trim())
+  .filter(Boolean);
+let proxyCursor = 0;
+function nextProxy() {
+  if (PROXY_LIST.length === 0) return null;
+  const proxy = PROXY_LIST[proxyCursor % PROXY_LIST.length];
+  proxyCursor += 1;
+  return proxy;
+}
+
 // Only progressive formats (video + audio already muxed together) are
 // requested — these are the only ones that yield a single direct URL that
 // can be streamed as-is, exactly matching what the previous RapidAPI
@@ -176,6 +198,7 @@ app.get("/health", (_req, res) => {
     service: "klyvexa-youtube-resolver-service",
     cookiesConfigured: cookiesReady,
     potProviderReady,
+    proxiesConfigured: PROXY_LIST.length,
   });
 });
 
@@ -196,7 +219,7 @@ app.post("/resolve", async (req, res) => {
   }
 
   try {
-    const info = await runYtDlp(url, YTDLP_TIMEOUT_MS);
+    const info = await resolveWithProxyRetries(url, YTDLP_TIMEOUT_MS);
     res.json({ ok: true, directUrl: info.url, title: info.title, ext: info.ext, hasAudio: info.hasAudio });
   } catch (err) {
     console.error("[resolver]", err && err.message ? err.message : err);
@@ -223,10 +246,34 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
+// When one or more YT_PROXY_LIST entries are configured, retries the whole
+// resolve on the next proxy if the current one is dead/blocked - a bare
+// connection failure or YouTube's bot-check are exactly the failure modes a
+// free rotating proxy list is expected to hit often, so a single bad proxy
+// must not fail the request outright. Caps attempts at the list length (or
+// 1, with no proxy, matching the previous direct-request behavior) so one
+// persistently broken list can't loop forever.
+async function resolveWithProxyRetries(url, timeoutMs) {
+  const attempts = Math.max(PROXY_LIST.length, 1);
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    const proxy = nextProxy();
+    try {
+      return await runYtDlp(url, timeoutMs, proxy);
+    } catch (err) {
+      lastErr = err;
+      const retryable = err && (err.code === "youtube_extraction_failed" || err.code === "resolve_timeout");
+      if (!proxy || !retryable) break; // no more proxies to rotate to, or a non-network error (e.g. private video)
+      console.warn(`[resolver] Proxy attempt failed (${proxy}), trying next proxy: ${err.message}`);
+    }
+  }
+  throw lastErr;
+}
+
 // Runs `yt-dlp -j <url>` with a fixed, safe format selector and parses the
 // single JSON object it prints. Never touches disk — only metadata (which
 // includes the resolved format's direct "url") is read from stdout.
-function runYtDlp(url, timeoutMs) {
+function runYtDlp(url, timeoutMs, proxy) {
   return new Promise((resolve, reject) => {
     const args = [
       "-f",
@@ -237,6 +284,7 @@ function runYtDlp(url, timeoutMs) {
       "--no-warnings",
       "--no-check-certificates",
       ...(cookiesReady ? ["--cookies", COOKIES_PATH] : []),
+      ...(proxy ? ["--proxy", proxy] : []),
       "-j",
       url,
     ];
@@ -320,7 +368,9 @@ function classifyYtDlpError(stderr) {
   // this is a distinct case from a real "sign in" age/consent wall, so it
   // must be checked before the generic "sign in" branch below.
   if (s.includes("confirm you're not a bot") || s.includes("confirm you are not a bot")) {
-    return "YouTube is blocking this server's IP as a suspected bot. Try again later, or configure cookies/a proxy on the resolver service.";
+    return PROXY_LIST.length > 0
+      ? "YouTube is blocking this server's datacenter IP as a suspected bot, and all configured proxies were also blocked or unreachable. Add more/fresher entries to YT_PROXY_LIST."
+      : "YouTube is blocking this server's IP as a suspected bot. Configure YT_PROXY_LIST with one or more residential/rotating proxy URLs on the resolver service - cookies alone do not fix this, since YouTube blocks the IP before checking cookies.";
   }
   // Distinct from the bot-check above: this means YouTube rejected the
   // request for missing/invalid PO token, which is what the built-in
