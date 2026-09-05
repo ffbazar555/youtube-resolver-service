@@ -27,10 +27,32 @@
 const express = require("express");
 const { spawn } = require("child_process");
 const crypto = require("crypto");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 
 const PORT = process.env.PORT || 10000;
 const SHARED_SECRET = process.env.RESOLVER_SECRET || "";
 const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 30_000);
+
+// Optional: a logged-in YouTube session's cookies (Netscape cookies.txt
+// format), base64-encoded into a single env var so it can be pasted into
+// Render's dashboard without uploading a file. When present, every yt-dlp
+// call authenticates as that browser session, which bypasses the
+// "Sign in to confirm you're not a bot" datacenter-IP block entirely -
+// YouTube trusts a real session cookie far more than any player-client
+// trick. Written once to a private tmp file at startup; never logged.
+const COOKIES_PATH = path.join(os.tmpdir(), "yt-cookies.txt");
+let cookiesReady = false;
+if (process.env.YT_COOKIES_BASE64) {
+  try {
+    fs.writeFileSync(COOKIES_PATH, Buffer.from(process.env.YT_COOKIES_BASE64, "base64"), { mode: 0o600 });
+    cookiesReady = true;
+    console.log("[resolver] Loaded YouTube cookies from YT_COOKIES_BASE64.");
+  } catch (err) {
+    console.error("[resolver] Failed to write cookies file:", err.message);
+  }
+}
 
 // Only progressive formats (video + audio already muxed together) are
 // requested — these are the only ones that yield a single direct URL that
@@ -68,7 +90,7 @@ const app = express();
 app.use(express.json({ limit: "16kb" }));
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "klyvexa-youtube-resolver-service" });
+  res.json({ ok: true, service: "klyvexa-youtube-resolver-service", cookiesConfigured: cookiesReady });
 });
 
 app.post("/resolve", async (req, res) => {
@@ -128,6 +150,7 @@ function runYtDlp(url, timeoutMs) {
       "--no-playlist",
       "--no-warnings",
       "--no-check-certificates",
+      ...(cookiesReady ? ["--cookies", COOKIES_PATH] : []),
       "-j",
       url,
     ];
