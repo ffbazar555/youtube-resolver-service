@@ -40,7 +40,12 @@ const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 30_000);
 // resolveWithProxyRetries() burn through dead proxies quickly and spend the
 // bulk of its time on ones that actually respond. Only applies when a proxy
 // is in use; a direct (no-proxy) request still gets the full YTDLP_TIMEOUT_MS.
-const PROXY_TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS || 12_000);
+// Needs to be long enough to cover PO token generation (challenge fetch +
+// integrity token + PoT mint) *plus* the actual yt-dlp resolve over the
+// proxy - 12s was cutting that combined flow off mid-request, causing an
+// endless regenerate-token/retry loop even though every individual step
+// was succeeding.
+const PROXY_TIMEOUT_MS = Number(process.env.PROXY_TIMEOUT_MS || 25_000);
 
 // -----------------------------------------------------------------------
 // PO Token provider companion process
