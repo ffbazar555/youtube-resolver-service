@@ -75,7 +75,20 @@ const FORMAT_SELECTOR = "18/best[acodec!=none][vcodec!=none]/best";
 // a video blocked on one client is frequently still resolvable on another,
 // so trying several in order meaningfully increases the success rate on a
 // shared cloud IP without needing cookies or a proxy.
-const PLAYER_CLIENTS = ["android", "ios", "tv", "web"];
+//
+// IMPORTANT: a browser session cookie is only valid for the "web" client
+// family - it was issued by youtube.com's web login flow, not by the
+// Android/iOS/TV apps' own (cookie-less) auth. Passing that cookie together
+// with --extractor-args player_client=android/ios/tv makes yt-dlp send a
+// half-authenticated, mismatched request, which YouTube rejects with
+// "The page needs to be reloaded" (a session-integrity error, distinct from
+// "Sign in to confirm you're not a bot"). So whenever cookies are
+// configured, "web" and its cookie-compatible variants must be tried
+// first; the cookie-less mobile clients stay as fallbacks for videos where
+// the web client itself gets format- or bot-blocked.
+const PLAYER_CLIENTS = cookiesReady
+  ? ["web", "web_safari", "mweb", "android", "ios", "tv"]
+  : ["android", "ios", "tv", "web"];
 const EXTRACTOR_ARGS = `youtube:player_client=${PLAYER_CLIENTS.join(",")}`;
 
 const YOUTUBE_HOSTS = new Set([
