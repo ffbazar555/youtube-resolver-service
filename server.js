@@ -35,8 +35,21 @@ const YTDLP_TIMEOUT_MS = Number(process.env.YTDLP_TIMEOUT_MS || 30_000);
 // Only progressive formats (video + audio already muxed together) are
 // requested — these are the only ones that yield a single direct URL that
 // can be streamed as-is, exactly matching what the previous RapidAPI
-// integration returned. Falls back to yt-dlp's own "best" if none exist.
-const FORMAT_SELECTOR = "best[acodec!=none][vcodec!=none]/best";
+// integration returned. itag 18 (360p mp4) is tried explicitly first
+// because it's the one progressive format YouTube still reliably serves;
+// the rest are fallbacks if it's ever missing. Falls back to yt-dlp's own
+// "best" if none exist.
+const FORMAT_SELECTOR = "18/best[acodec!=none][vcodec!=none]/best";
+
+// As of 2024-2025, YouTube's default "web" player client frequently stops
+// returning a usable direct "url" for progressive formats (it only hands
+// back an HLS/DASH manifest instead), which is why the plain format
+// selector above can fail with "Requested format is not available" even
+// though the video is perfectly playable. The "android" client still
+// returns real direct googlevideo.com URLs, so it's requested first, with
+// "web" kept as a fallback client in case a given video isn't served to
+// android (e.g. certain age-gated or restricted videos).
+const EXTRACTOR_ARGS = "youtube:player_client=android,web";
 
 const YOUTUBE_HOSTS = new Set([
   "youtube.com",
@@ -105,6 +118,8 @@ function runYtDlp(url, timeoutMs) {
     const args = [
       "-f",
       FORMAT_SELECTOR,
+      "--extractor-args",
+      EXTRACTOR_ARGS,
       "--no-playlist",
       "--no-warnings",
       "--no-check-certificates",
